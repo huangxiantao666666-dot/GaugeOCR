@@ -1,0 +1,26 @@
+data:
+  train_ann_file: "data/train_readings.json"
+  val_ann_file: "data/val_readings.json"
+  image_size: [448, 448]
+  batch_size: 4
+  num_workers: 4
+
+model:
+  sam_model_name: "sam-base"
+  deeplab_backbone: "mobilenet_v2"
+  qwen_model_name: "Qwen/Qwen2-0.5B"
+  visual_dim: 896
+  num_queries: 784
+  num_keypoints: 6
+  geometric_checkpoint: "checkpoints/stage1/best_geometric.pth"
+
+train:
+  stage2:
+    epochs: 30
+    lr: 5.0e-5
+    lr_decay: 1.0e-6
+    freeze_geometric: true
+    use_causal_queries: false
+    sparse_reg_weight: 0.001
+    checkpoint_dir: "checkpoints/stage2"
+    log_dir: "logs/stage2"

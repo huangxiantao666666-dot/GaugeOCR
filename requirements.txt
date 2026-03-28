@@ -1,0 +1,20 @@
+# PyTorch and torchvision for deep learning
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Hugging Face Transformers for pre-trained models (SAM, Qwen2)
+transformers>=4.35.0
+
+# Computer vision libraries
+opencv-python  # For image processing
+numpy  # For numerical operations
+scikit-image  # For additional image processing utilities
+timm  # For pre-trained vision models
+
+# Configuration and utilities
+pyyaml  # For YAML config files
+tqdm  # For progress bars
+matplotlib  # For visualization
+pillow  # Image processing
+scipy  # Scientific computing
+segment-anything  # Meta's Segment Anything Model

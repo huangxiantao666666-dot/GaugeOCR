@@ -1,0 +1,37 @@
+data:
+  train_ann_file: "data/train.json"
+  val_ann_file: "data/val.json"
+  image_size: [448, 448]
+  batch_size: 8
+  num_workers: 4
+
+model:
+  sam_model_name: "sam-base"
+  deeplab_backbone: "mobilenet_v2"
+  qwen_model_name: "Qwen/Qwen2-0.5B"
+  visual_dim: 896
+  num_queries: 784
+  num_keypoints: 6
+  moe_experts: 8
+
+train:
+  stage1:
+    epochs: 30
+    lr: 1.0e-4
+    lr_decay: 1.0e-5
+    weight_decay: 1.0e-4
+    loss_weights:
+      heatmap: 1.0
+      dice: 0.1
+  stage2:
+    epochs: 30
+    lr: 5.0e-5
+    lr_decay: 1.0e-6
+    freeze_geometric: true
+    use_causal_queries: false
+  stage3:
+    epochs: 20
+    lr: 1.0e-5
+    lr_decay: 5.0e-8
+    freeze_vision: true
+    use_causal_queries: true
