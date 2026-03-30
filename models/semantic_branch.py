@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from segment_anything import sam_model_registry, SamPredictor
+from segment_anything import sam_model_registry
 
 
 class SemanticBranch(nn.Module):
@@ -8,26 +8,32 @@ class SemanticBranch(nn.Module):
     Semantic Branch: SAM-based feature extraction.
     
     This branch uses Meta's Segment Anything Model (SAM) to extract
-    rich semantic features from the input image. The SAM features are
-    then projected to match the visual dimension required by downstream modules.
+    rich semantic features from the input image.
+    
+    Important:
+    - This branch only contains the SAM image encoder (frozen)
+    - The projection layer is in the Adapter module, not here
+    - This separation allows easy parameter freezing in Stage 2 training
     
     Data Flow:
     Input Image [B, 3, 448, 448]
     → SAM Image Encoder (frozen)
-    → SAM Features [B, 768, 28, 28] (for sam-base)
-    → 1x1 Conv Projection
-    → Projected Features [B, visual_dim, 28, 28]
-    → Flatten & Transpose
-    → Semantic Tokens [B, 784, visual_dim] (784 = 28×28)
+    → SAM Features [B, sam_dim, 28, 28] (sam_dim: 768/1024/1280)
+    
+    Note: The SAM features are then projected to visual_dim (896) by the
+    Adapter module's SAMProjection layer, not by this branch.
     """
     
-    def __init__(self, sam_model_name="sam-base", visual_dim=896):
+    def __init__(self, sam_model_name="sam-base", input_size=448, 
+                 train_sam=False, sam_checkpoint_path=None):
         """
         Initialize the semantic branch.
         
         Args:
             sam_model_name: SAM model name ('sam-base', 'sam-large', 'sam-huge')
-            visual_dim: Output feature dimension for downstream modules
+            input_size: Input image size (for padding)
+            train_sam: Whether to train the SAM model (default: False)
+            sam_checkpoint_path: Path to the SAM model checkpoint (default: None, uses default checkpoints)
         """
         super().__init__()
         
@@ -39,14 +45,18 @@ class SemanticBranch(nn.Module):
         }
         
         # Load pre-trained SAM model
-        self.sam = sam_model_registry[sam_model_name](checkpoint=sam_checkpoint_map[sam_model_name])
+        self.sam = sam_model_registry[sam_model_name](checkpoint=sam_checkpoint_path)
+
+        self.sam.image_encoder.set_image_size(input_size)
         
         # Determine SAM's output dimension based on model size
         self.sam_dim = 768 if sam_model_name == 'sam-base' else (1024 if sam_model_name == 'sam-large' else 1280)
         
-        # 1x1 convolution to project SAM features to the desired visual dimension
-        # Shape change: [B, sam_dim, 28, 28] → [B, visual_dim, 28, 28]
-        self.projection = nn.Conv2d(self.sam_dim, visual_dim, kernel_size=1, stride=1, padding=0)
+        # Freeze SAM parameters by default
+        for param in self.sam.parameters():
+            param.requires_grad = train_sam
+        if not train_sam:
+            self.sam.eval()
     
     def forward(self, x):
         """
@@ -56,8 +66,8 @@ class SemanticBranch(nn.Module):
             x: Input image tensor [B, 3, 448, 448]
         
         Returns:
-            semantic_tokens: Semantic tokens [B, 784, visual_dim]
-                            where 784 = 28×28 (spatial grid)
+            sam_features: SAM encoder output [B, sam_dim, 28, 28]
+                         Note: This is NOT projected to visual_dim yet
         """
         # Extract SAM features without gradient computation
         # SAM is kept frozen during training
@@ -65,15 +75,6 @@ class SemanticBranch(nn.Module):
             # SAM image encoder output shape: [B, sam_dim, 28, 28]
             features = self.sam.image_encoder(x)
         
-        # Project SAM features to the desired visual dimension
-        # Shape change: [B, sam_dim, 28, 28] → [B, visual_dim, 28, 28]
-        features = self.projection(features)
-        
-        # Reshape to sequence format for transformer processing
-        # Shape changes:
-        # [B, visual_dim, 28, 28] → [B, visual_dim, 784] (flatten spatial dimensions)
-        # → [B, 784, visual_dim] (transpose to put sequence dimension first)
-        B, C, H, W = features.shape
-        features = features.flatten(2).transpose(1, 2)
-        
+        # Return raw SAM features (no projection)
+        # The projection to visual_dim is done by the Adapter module
         return features

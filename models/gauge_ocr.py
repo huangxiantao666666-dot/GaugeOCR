@@ -2,8 +2,7 @@ import torch
 import torch.nn as nn
 from .semantic_branch import SemanticBranch
 from .geometric_branch import GeometricBranch
-from .gate import GateGenerator
-from .cross_attention import CrossAttentionModule
+from .adapter import Adapter
 from .causal_encoder import CausalEncoder
 from .decoder import LLMDecoder
 
@@ -14,17 +13,18 @@ class CausalGauge(nn.Module):
     
     This is the main model that integrates all components for three-stage training:
     - Stage 1: Only geometric branch (keypoint detection)
-    - Stage 2: Semantic + geometric fusion (no causal queries)
+    - Stage 2: Semantic + geometric fusion with Adapter (no causal queries)
     - Stage 3: Full model with causal flow reordering (with causal queries)
     
     Data Flow Overview:
     Input Image [B, 3, 448, 448]
-    ├─→ Semantic Branch (SAM) → Semantic Tokens [B, 784, dim]
+    ├─→ Semantic Branch (SAM) → SAM Features [B, sam_dim, 28, 28]
     └─→ Geometric Branch (DeepLabV3+) → Geometric Features [B, 256, 112, 112]
-           └─→ Gate Generator → Gate Scores [B, 784]
     
-    Cross-Attention Fusion:
-    Semantic Tokens × Gate Scores + Geometric Features → Fused Tokens [B, 784, dim]
+    Adapter:
+    ├─→ SAM Projection: [B, sam_dim, 28, 28] → [B, 784, visual_dim]
+    ├─→ Gate Generator: [B, 256, 112, 112] → [B, 784]
+    └─→ Cross-Attention: Fuses semantic + geometric → [B, 784, visual_dim]
     
     Causal Encoder:
     Fused Tokens [+ Causal Queries] → Encoded Tokens
@@ -50,7 +50,7 @@ class CausalGauge(nn.Module):
         # Extracts high-level semantic features from the image
         self.semantic_branch = SemanticBranch(
             sam_model_name=config['model']['sam_model_name'],
-            visual_dim=self.visual_dim
+            input_size=448
         )
         
         # Geometric Branch: DeepLabV3+-based keypoint detection
@@ -60,13 +60,11 @@ class CausalGauge(nn.Module):
             num_keypoints=config['model']['num_keypoints']
         )
         
-        # Gate Generator: Controls semantic token weights
-        # Generates gate scores based on geometric features
-        self.gate_generator = GateGenerator(in_channels=256)
-        
-        # Cross-Attention Module: Fuses semantic and geometric features
-        self.cross_attention = CrossAttentionModule(
-            dim=self.visual_dim,
+        # Adapter: Combines SAM projection, gate generator, and cross-attention
+        # This module fuses semantic and geometric features
+        self.adapter = Adapter(
+            sam_dim=self.semantic_branch.sam_dim,
+            visual_dim=self.visual_dim,
             geometric_dim=256,
             num_heads=8
         )
@@ -75,7 +73,7 @@ class CausalGauge(nn.Module):
         # Processes fused tokens with optional causal queries
         self.causal_encoder = CausalEncoder(
             qwen_model_name=config['model']['qwen_model_name'],
-            dim=self.visual_dim,
+            visual_dim=self.visual_dim,
             num_queries=self.num_queries
         )
         
@@ -110,23 +108,21 @@ class CausalGauge(nn.Module):
         
         # Stages 2, 3, or inference: Full model
         
-        # Step 1: Extract semantic tokens from SAM
-        # Shape: [B, 784, visual_dim]
-        semantic_tokens = self.semantic_branch(images)
+        # Step 1: Extract SAM features
+        # Shape: [B, sam_dim, 28, 28]
+        sam_features = self.semantic_branch(images)
         
         # Step 2: Extract geometric features from DeepLabV3+
         # Shape: [B, 256, 112, 112]
         geometric_features = self.geometric_branch(images)
         
-        # Step 3: Generate gate scores from geometric features
-        # Shape: [B, 784]
-        gate_scores = self.gate_generator(geometric_features)
+        # Step 3: Use Adapter to project SAM features and fuse with geometric features
+        # Returns:
+        #   - fused_tokens: [B, 784, visual_dim]
+        #   - gate_scores: [B, 784]
+        fused_tokens, gate_scores = self.adapter(sam_features, geometric_features)
         
-        # Step 4: Fuse semantic and geometric features with cross-attention
-        # Shape: [B, 784, visual_dim]
-        fused_tokens = self.cross_attention(semantic_tokens, geometric_features, gate_scores)
-        
-        # Step 5: Encode with causal encoder
+        # Step 4: Encode with causal encoder
         # Shape: [B, 784, hidden_size] or [B, 1568, hidden_size]
         encoded_tokens = self.causal_encoder(fused_tokens, use_causal_queries=use_causal_queries)
         
