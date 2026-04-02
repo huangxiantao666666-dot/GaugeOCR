@@ -1,0 +1,109 @@
+# DeepLabV3+ Segmentation Training Configuration
+# ===============================================
+# This config is used for training DeepLabV3+ on the gauge segmentation task
+
+# Dataset paths
+dataset:
+  root: "dataset/meter_seg/meter_seg"
+  images_train: "dataset/meter_seg/meter_seg/images/train"
+  images_val: "dataset/meter_seg/meter_seg/images/val"
+  annotations_train: "dataset/meter_seg/meter_seg/annotations/train"
+  annotations_val: "dataset/meter_seg/meter_seg/annotations/val"
+
+# Model configuration
+model:
+  name: "deeplabv3plus_resnet50"
+  num_classes: 3  # background(0) + pointer(1) + scale(2)
+  pretrained: true
+  pretrained_path: "checkpoints/deeplabv3plus_resnet50.pth"  # optional pretrained weights
+
+# Training configuration - Stage 1: Freeze backbone, train only head
+training_stage1:
+  num_epochs: 20
+  batch_size: 8
+  learning_rate: 1e-3
+  weight_decay: 5e-4
+  optimizer: "AdamW"
+  scheduler: "CosineAnnealingLR"
+  T_max: 30
+  eta_min: 1e-6
+  save_interval: 5  # save checkpoint every N epochs
+  eval_interval: 1  # evaluate every N epochs
+  early_stopping_patience: 10
+
+# Training configuration - Stage 2: Fine-tune all layers
+training_stage2:
+  num_epochs: 200
+  batch_size: 4
+  learning_rate: 5e-5
+  weight_decay: 5e-4
+  optimizer: "AdamW"
+  scheduler: "CosineAnnealingLR"
+  T_max: 50
+  eta_min: 1e-7
+  save_interval: 20
+  eval_interval: 1
+  early_stopping_patience: 15
+
+# Loss configuration - Stage 1: Freeze backbone, train only head
+loss_stage1:
+  use_ce_loss: true
+  use_focal_loss: false  # Focal loss disabled in Stage 1
+  use_dice_loss: true
+  dice_weight: 0.5
+  focal_weight: 0.0  # No focal loss in Stage 1
+  separation_weight: 0.0  # No instance separation loss in Stage 1
+  ignore_index: 255
+  class_weights: [0.05, 10.0, 3.0]  # Emphasize pointer and scale classes
+  focal_gamma: 2.0  # Focal loss focusing parameter
+
+# Loss configuration - Stage 2: Fine-tune all layers
+loss_stage2:
+  use_ce_loss: true
+  use_focal_loss: true  # Enable focal loss in Stage 2
+  use_dice_loss: true
+  dice_weight: 0.5
+  focal_weight: 0.2  # Focal loss weight for hard example mining
+  separation_weight: 0.3  # Instance separation loss for better scale mark separation
+  ignore_index: 255
+  class_weights: [0.05, 10.0, 3.0]  # Emphasize pointer and scale classes
+  focal_gamma: 2.0  # Focal loss focusing parameter
+  separation_config:
+    min_distance: 5
+    penalty_weight: 1.0
+    scale_class_idx: 2
+
+# Data augmentation
+augmentation:
+  train:
+    random_flip: true
+    random_rotation: 15
+    random_scale: [0.8, 1.2]
+    random_crop: true
+    crop_size: [448, 448]
+  val:
+    center_crop: [448, 448]
+
+# Input/Output
+input:
+  image_size: [448, 448]
+  normalize_mean: [0.485, 0.456, 0.406]
+  normalize_std: [0.229, 0.224, 0.225]
+
+# Checkpoint and logging
+checkpoint:
+  save_dir: "checkpoints/segmentation"
+  best_model_name: "best_model.pth"
+  final_model_name: "final_model.pth"
+
+logging:
+  log_dir: "logs/segmentation"
+  tensorboard: true
+
+# Device
+device:
+  use_cuda: true
+  gpu_ids: [0]
+
+# Random seed
+seed: 42

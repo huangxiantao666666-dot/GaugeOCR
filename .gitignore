@@ -164,6 +164,8 @@ data/*.txt
 data/images/
 data/annotations/
 
+dataset/
+
 # Log files
 logs/
 *.log

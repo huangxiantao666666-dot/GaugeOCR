@@ -10,6 +10,7 @@ opencv-python  # For image processing
 numpy  # For numerical operations
 scikit-image  # For additional image processing utilities
 timm  # For pre-trained vision models
+ultralytics  # For YOLOv8 object detection (clock/gauge detection)
 
 # Configuration and utilities
 pyyaml  # For YAML config files

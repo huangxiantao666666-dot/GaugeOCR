@@ -21,6 +21,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from collections import OrderedDict
 import numpy as np
+import os
 from PIL import Image
 
 
@@ -1084,6 +1085,103 @@ def deeplabv3plus_mobilenet(num_classes=21, output_stride=16):
         DeepLabV3+ model with MobileNetV2 backbone
     """
     return _segm_mobilenet('deeplabv3plus', 'mobilenetv2', num_classes, output_stride)
+
+
+# ============================================
+# HuggingFace-style Model Creation API
+# ============================================
+
+DEFAULT_PRETRAINED_PATH = "checkpoints/deeplabv3plus_resnet50.pth"
+
+
+def create_deeplabv3plus(backbone='resnet50', num_classes=21, output_stride=16,
+                         pretrained=True, pretrained_path=None, 
+                         weights_only=True):
+    """
+    Create DeepLabV3+ model - HuggingFace-style API.
+    
+    This function provides a convenient way to create DeepLabV3+ models
+    with automatic pretrained weight loading and head replacement.
+    
+    Usage Examples:
+        # 1. Create model with 21 classes (for loading pretrained weights)
+        model = create_deeplabv3plus(backbone='resnet50', num_classes=21, pretrained=True)
+        
+        # 2. Create model with custom classes (automatically loads pretrained and replaces head)
+        model = create_deeplabv3plus(backbone='resnet50', num_classes=3, pretrained=True)
+        
+        # 3. Create model without pretrained weights
+        model = create_deeplabv3plus(backbone='resnet50', num_classes=3, pretrained=False)
+        
+        # 4. Specify custom pretrained weights path
+        model = create_deeplabv3plus(backbone='resnet50', num_classes=3, 
+                                      pretrained=True, pretrained_path='custom.pth')
+    
+    Args:
+        backbone: Backbone architecture ('resnet50', 'resnet101', or 'mobilenet')
+        num_classes: Number of segmentation classes
+        output_stride: Output stride (8 or 16)
+        pretrained: Whether to load pretrained weights
+        pretrained_path: Custom path to pretrained weights (optional)
+        weights_only: Whether to use weights_only=True when loading (for security)
+    
+    Returns:
+        DeepLabV3+ model with specified configuration
+    
+    Note:
+        When pretrained=True and num_classes != 21:
+        1. First creates model with 21 classes to match pretrained weights
+        2. Loads pretrained weights (PASCAL VOC 21 classes)
+        3. Replaces classification head with new randomly initialized head for num_classes
+    """
+    # Validate backbone
+    backbone = backbone.lower()
+    if backbone not in ['resnet50', 'resnet101', 'mobilenet']:
+        raise ValueError(f"Unknown backbone: {backbone}. Choose from 'resnet50', 'resnet101', 'mobilenet'")
+    
+    # Determine pretrained path
+    if pretrained and pretrained_path is None:
+        # Use default path - user should provide the actual pretrained weights
+        pretrained_path = DEFAULT_PRETRAINED_PATH
+    
+    # Create model
+    if backbone == 'resnet50':
+        model = deeplabv3plus_resnet50(num_classes=21, output_stride=output_stride)
+    elif backbone == 'resnet101':
+        model = deeplabv3plus_resnet101(num_classes=21, output_stride=output_stride)
+    else:  # mobilenet
+        model = deeplabv3plus_mobilenet(num_classes=21, output_stride=output_stride)
+    
+    # Load pretrained weights and/or replace head
+    if pretrained and pretrained_path and os.path.exists(pretrained_path):
+        print(f"[create_deeplabv3plus] Loading pretrained weights from: {pretrained_path}")
+        try:
+            state_dict = load_pretrained_weights(pretrained_path, weights_only=weights_only)
+            
+            # Handle different key formats
+            new_state_dict = OrderedDict()
+            for k, v in state_dict.items():
+                if k.startswith('module.'):
+                    k = k[7:]  # Remove 'module.' prefix
+                new_state_dict[k] = v
+            
+            # Try to load pretrained weights
+            model_dict = model.state_dict()
+            loaded_dict = {k: v for k, v in new_state_dict.items() if k in model_dict}
+            model_dict.update(loaded_dict)
+            model.load_state_dict(model_dict, strict=False)
+            print(f"[create_deeplabv3plus] Loaded {len(loaded_dict)}/{len(model_dict)} layers from pretrained")
+            
+        except Exception as e:
+            print(f"[create_deeplabv3plus] Warning: Failed to load pretrained weights: {e}")
+            print(f"[create_deeplabv3plus] Continuing with randomly initialized weights")
+    
+    # Replace classification head if num_classes != 21
+    if num_classes != 21:
+        print(f"[create_deeplabv3plus] Replacing classification head: 21 -> {num_classes} classes")
+        model.replace_classification_head(num_classes)
+    
+    return model
 
 
 # ============================================

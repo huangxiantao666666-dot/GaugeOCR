@@ -6,8 +6,8 @@ data:
   num_workers: 4
 
 model:
-  deeplab_backbone: "mobilenet_v2"
-  num_keypoints: 6
+  deeplab_backbone: "resnet50"
+  num_keypoints: 2
 
 train:
   stage1:
