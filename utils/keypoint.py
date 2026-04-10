@@ -130,7 +130,7 @@ def visualize_segmentation(original_image, pred_mask, gt_mask=None, image_size=(
     Args:
         original_image: Original PIL image
         pred_mask: Predicted segmentation mask [H, W]
-        gt_mask: Ground truth mask [H, W] (optional)
+        gt_mask: Ground truth mask [H, W] (optional, can be None for test images)
         image_size: Size for display
         
     Returns:
@@ -146,11 +146,13 @@ def visualize_segmentation(original_image, pred_mask, gt_mask=None, image_size=(
     # Blend original image with prediction
     blend = (original_np.astype(np.float32) * 0.5 + pred_color.astype(np.float32) * 0.5).astype(np.uint8)
     
-    # Create visualization
+    # Create visualization layout based on whether ground truth is available
     if gt_mask is not None:
+        # With ground truth: show [Original | Prediction | Ground Truth | Blend]
         gt_color = pred_mask_to_color(gt_mask)
         vis_image = np.hstack([original_np, pred_color, gt_color, blend])
     else:
+        # Without ground truth: show [Original | Prediction | Blend]
         vis_image = np.hstack([original_np, pred_color, blend])
     
     return vis_image
@@ -223,8 +225,11 @@ def process_single_image(model, image_path, gt_path=None, device='cpu', save_pat
     gt_mask = None
     if gt_path and os.path.exists(gt_path):
         gt_mask = load_ground_truth(gt_path)
+        print(f"[process_single_image] Loaded ground truth from: {gt_path}")
+    else:
+        print(f"[process_single_image] No ground truth provided, visualization will show prediction only")
     
-    # Visualize
+    # Visualize (works with or without ground truth)
     vis_image = visualize_segmentation(original_image, pred_mask, gt_mask)
     
     # Save if requested
@@ -273,6 +278,43 @@ def process_dataset(model, images_dir, annotations_dir, output_dir, device='cpu'
         process_single_image(model, image_path, gt_path, device, output_path)
     
     print(f"[process_dataset] Done! Visualizations saved to: {output_dir}")
+
+
+def process_folder_without_annotations(model, images_dir, output_dir, device='cpu', limit=None):
+    """
+    Process multiple images from a folder without ground truth annotations.
+    This is useful for testing model generalization on random images from the internet.
+    
+    Args:
+        model: Trained DeepLabV3+ model
+        images_dir: Directory containing input images
+        output_dir: Directory to save visualizations
+        device: Device to run inference on
+        limit: Maximum number of images to process (None for all)
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Get image files
+    image_files = sorted([f for f in os.listdir(images_dir) if f.endswith(('.jpg', '.png', '.jpeg', '.JPG', '.PNG'))])
+    
+    if limit:
+        image_files = image_files[:limit]
+    
+    print(f"[process_folder_without_annotations] Processing {len(image_files)} images without ground truth...")
+    print(f"Input directory: {images_dir}")
+    print(f"Output directory: {output_dir}")
+    
+    for idx, image_file in enumerate(image_files):
+        image_path = os.path.join(images_dir, image_file)
+        output_path = os.path.join(output_dir, f"vis_{image_file.replace('.jpg', '.png').replace('.jpeg', '.png')}")
+        
+        print(f"[{idx+1}/{len(image_files)}] Processing: {image_file}")
+        process_single_image(model, image_path, gt_path=None, device=device, save_path=output_path)
+    
+    print(f"\n[process_folder_without_annotations] Done!")
+    print(f"Processed {len(image_files)} images.")
+    print(f"Visualizations saved to: {output_dir}")
+    print(f"Note: No ground truth comparison - showing prediction results only.")
 
 
 def calculate_iou(pred_mask, gt_mask, num_classes=3):
@@ -385,26 +427,65 @@ def evaluate_model(model, images_dir, annotations_dir, device='cpu', limit=None)
 
 
 if __name__ == '__main__':
-    # Configuration
-    CHECKPOINT_PATH = 'checkpoints/segmentation/final_model.pth'
-    IMAGES_DIR = 'dataset/meter_seg/meter_seg/images/val'
-    ANNOTATIONS_DIR = 'dataset/meter_seg/meter_seg/annotations/val'
-    OUTPUT_DIR = 'outputs/visualization'
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='DeepLabV3+ Segmentation Visualization and Evaluation')
+    parser.add_argument('--checkpoint', type=str, default='checkpoints/segmentation/final_model.pth',
+                       help='Path to model checkpoint')
+    parser.add_argument('--images_dir', type=str, default='dataset/meter_seg/meter_seg/images/val',
+                       help='Directory containing input images')
+    parser.add_argument('--annotations_dir', type=str, default=None,
+                       help='Directory containing ground truth annotations (optional)')
+    parser.add_argument('--output_dir', type=str, default='outputs/visualization',
+                       help='Directory to save visualizations')
+    parser.add_argument('--limit', type=int, default=10,
+                       help='Maximum number of images to process (default: 10)')
+    parser.add_argument('--no_gt', action='store_true',
+                       help='Process images without ground truth (for testing on random images)')
+    
+    args = parser.parse_args()
     
     # Device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
     # Load model
-    model = load_trained_model(CHECKPOINT_PATH, device=device)
+    model = load_trained_model(args.checkpoint, device=device)
     
-    # Process some images
     print("\n" + "="*60)
     print("VISUALIZING SEGMENTATION RESULTS")
     print("="*60)
-    process_dataset(model, IMAGES_DIR, ANNOTATIONS_DIR, OUTPUT_DIR, device, limit=10)
     
-    # Evaluate
+    if args.no_gt or args.annotations_dir is None:
+        # Process images without ground truth
+        print("\nMode: Testing without ground truth annotations")
+        print("This mode is useful for testing model generalization on random images.")
+        print()
+        process_folder_without_annotations(
+            model, 
+            args.images_dir, 
+            args.output_dir, 
+            device, 
+            limit=args.limit
+        )
+    else:
+        # Process images with ground truth
+        print("\nMode: Evaluation with ground truth annotations")
+        print()
+        process_dataset(
+            model, 
+            args.images_dir, 
+            args.annotations_dir, 
+            args.output_dir, 
+            device, 
+            limit=args.limit
+        )
+        
+        # Evaluate
+        print("\n" + "="*60)
+        print("EVALUATING MODEL PERFORMANCE")
+        print("="*60)
+        evaluate_model(model, args.images_dir, args.annotations_dir, device)
     print("\n" + "="*60)
     print("MODEL EVALUATION")
     print("="*60)

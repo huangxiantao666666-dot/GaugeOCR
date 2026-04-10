@@ -88,44 +88,48 @@ class ClockDetector:
                 - confidence: Detection confidence score
                 - class_id: Class ID of the detection
         """
-        # Run inference
-        results = self.model(image_path, conf=self.confidence_threshold)
-        
-        # Get the first result (single image)
-        result = results[0]
-        
-        # Extract detections
-        detections = []
-        if result.boxes is not None:
-            boxes = result.boxes.xyxy.cpu().numpy()  # [x1, y1, x2, y2]
-            confs = result.boxes.conf.cpu().numpy()   # Confidence scores
-            classes = result.boxes.cls.cpu().numpy()  # Class IDs
+        try:
+            # Run inference with verbose=False to suppress YOLO output
+            results = self.model(image_path, conf=self.confidence_threshold, verbose=False)
             
-            # Get class names from model
-            class_names = self.model.names
+            # Get the first result (single image)
+            result = results[0]
             
-            for i in range(len(boxes)):
-                class_id = int(classes[i])
-                class_name = class_names[class_id]
+            # Extract detections
+            detections = []
+            if result.boxes is not None:
+                boxes = result.boxes.xyxy.cpu().numpy()  # [x1, y1, x2, y2]
+                confs = result.boxes.conf.cpu().numpy()   # Confidence scores
+                classes = result.boxes.cls.cpu().numpy()  # Class IDs
                 
-                # Only keep detections that are 'clock' or similar categories
-                # Common clock/gauge class names: 'clock', 'gauge', 'meter', '仪表', '钟表'
-                clock_keywords = ['clock', 'gauge', 'meter', '仪表', '钟表', '压力表', '电压表', '电流表']
-                is_clock = any(keyword in class_name.lower() for keyword in clock_keywords)
+                # Get class names from model
+                class_names = self.model.names
                 
-                if is_clock:
-                    detections.append({
-                        'box': boxes[i].tolist(),
-                        'confidence': float(confs[i]),
-                        'class_id': class_id,
-                        'class_name': class_name
-                    })
-        
-        print(f"Detected {len(detections)} clock(s) in {image_path}")
-        return detections
+                for i in range(len(boxes)):
+                    class_id = int(classes[i])
+                    class_name = class_names[class_id]
+                    
+                    # Only keep detections that are 'clock' or similar categories
+                    # Common clock/gauge class names: 'clock', 'gauge', 'meter', '仪表', '钟表'
+                    clock_keywords = ['clock', 'gauge', 'meter', '仪表', '钟表', '压力表', '电压表', '电流表']
+                    is_clock = any(keyword in class_name.lower() for keyword in clock_keywords)
+                    
+                    if is_clock:
+                        detections.append({
+                            'box': boxes[i].tolist(),
+                            'confidence': float(confs[i]),
+                            'class_id': class_id,
+                            'class_name': class_name
+                        })
+            
+            return detections
+            
+        except Exception as e:
+            print(f"  ERROR processing {image_path}: {str(e)}")
+            return []
     
     def crop_and_save(self, image_path: str, detections: List[Dict], 
-                     output_dir: str, base_name: str) -> List[str]:
+                     output_dir: str, base_name: str, show_progress: bool = False) -> List[str]:
         """
         Crop detected clocks and save them as new images.
         
@@ -134,6 +138,7 @@ class ClockDetector:
             detections: List of detection dictionaries
             output_dir: Directory to save cropped images
             base_name: Base name for the cropped images
+            show_progress: Whether to print progress information
         
         Returns:
             List of paths to saved cropped images
@@ -157,34 +162,56 @@ class ClockDetector:
             x1, y1 = max(0, x1), max(0, y1)
             x2, y2 = min(w, x2), min(h, y2)
             
-            # Crop the region
-            cropped = image[y1:y2, x1:x2]
+            # Calculate crop dimensions
+            crop_width = x2 - x1
+            crop_height = y2 - y1
             
-            # Generate output filename
-            output_filename = f"{base_name}_clock_{i+1}.jpg"
-            output_path = os.path.join(output_dir, output_filename)
+            # Check if crop dimensions are smaller than 0.5x original dimensions
+            should_crop = (crop_width < w * 0.5) or (crop_height < h * 0.5)
+            
+            if should_crop:
+                # Crop the region
+                cropped = image[y1:y2, x1:x2]
+                
+                # Generate output filename
+                output_filename = f"{base_name}_clock_{i+1}.jpg"
+                output_path = os.path.join(output_dir, output_filename)
 
-            # Save the cropped image
-            cv2.imwrite(output_path, cropped)
-            saved_paths.append(output_path)
-            
-            print(f"  Saved: {output_filename} (box: [{x1}, {y1}, {x2}, {y2}], "
-                  f"conf: {det['confidence']:.3f})")
+                # Save the cropped image
+                cv2.imwrite(output_path, cropped)
+                saved_paths.append(output_path)
+                
+                if show_progress:
+                    print(f"  Saved (cropped): {output_filename} (box: [{x1}, {y1}, {x2}, {y2}], "
+                          f"size: {crop_width}x{crop_height}, conf: {det['confidence']:.3f})")
+            else:
+                # Copy the original image
+                output_filename = f"{base_name}_full_{i+1}.jpg"
+                output_path = os.path.join(output_dir, output_filename)
+                
+                cv2.imwrite(output_path, image)
+                saved_paths.append(output_path)
+                
+                if show_progress:
+                    print(f"  Saved (full): {output_filename} (box: [{x1}, {y1}, {x2}, {y2}], "
+                          f"size: {crop_width}x{crop_height} >= 0.5x original, conf: {det['confidence']:.3f})")
         
         return saved_paths
     
-    def process_image(self, image_path: str, output_dir: str) -> Dict[str, List[str]]:
+    def process_image(self, image_path: str, output_dir: str, show_progress: bool = False) -> Dict[str, List[str]]:
         """
         Process a single image: detect clocks and crop them.
         
         Args:
             image_path: Path to the input image
             output_dir: Directory to save cropped images
+            show_progress: Whether to print progress information
         
         Returns:
             Dictionary mapping: {source_image: [cropped_image_paths]}
         """
-        print(f"\nProcessing image: {image_path}")
+        if show_progress:
+            print(f"\nProcessing image: {image_path}")
         
         # Get base name for output files
         base_name = Path(image_path).stem
@@ -193,11 +220,17 @@ class ClockDetector:
         detections = self.detect_clocks(image_path)
         
         if len(detections) == 0:
-            print(f"  No clocks detected in {image_path}")
+            if show_progress:
+                print(f"  No clocks detected in {image_path}")
             return {image_path: []}
         
         # Crop and save
-        saved_paths = self.crop_and_save(image_path, detections, output_dir, base_name)
+        saved_paths = self.crop_and_save(image_path, detections, output_dir, base_name, show_progress=False)
+        
+        if show_progress:
+            print(f"Detected {len(detections)} clock(s) in {image_path}")
+            for saved_path in saved_paths:
+                print(f"  Saved: {os.path.basename(saved_path)}")
         
         return {image_path: saved_paths}
     
@@ -234,10 +267,28 @@ class ClockDetector:
         
         # Process each image with progress bar
         all_mappings = {}
-        for img_path in tqdm(image_files, desc="Processing images", unit="img"):
-            img_path_str = str(img_path)
-            mappings = self.process_image(img_path_str, output_folder)
-            all_mappings.update(mappings)
+        failed_images = []
+        
+        with tqdm(total=len(image_files), desc="Processing images", unit="img") as pbar:
+            for img_path in image_files:
+                img_path_str = str(img_path)
+                try:
+                    # Process image without individual progress output
+                    mappings = self.process_image(img_path_str, output_folder, show_progress=False)
+                    all_mappings.update(mappings)
+                    
+                    # Update progress bar with detection info
+                    num_detections = len(mappings[list(mappings.keys())[0]])
+                    if num_detections > 0:
+                        pbar.set_postfix_str(f"Detected: {num_detections}")
+                    else:
+                        pbar.set_postfix_str("No detection")
+                    
+                except Exception as e:
+                    print(f"\nERROR processing {img_path_str}: {str(e)}")
+                    failed_images.append(img_path_str)
+                
+                pbar.update(1)
         
         # Print summary
         total_cropped = sum(len(v) for v in all_mappings.values())
@@ -245,6 +296,8 @@ class ClockDetector:
         print(f"Processing complete!")
         print(f"  Images processed: {len(all_mappings)}")
         print(f"  Total clocks cropped: {total_cropped}")
+        if len(failed_images) > 0:
+            print(f"  Failed images: {len(failed_images)}")
         print(f"  Output directory: {output_folder}")
         print(f"{'='*60}")
         
